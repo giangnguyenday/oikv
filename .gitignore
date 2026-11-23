@@ -7,3 +7,6 @@
 !/assets/Aeonik Pro TRIAL/AeonikProTRIAL-Regular.otf
 /assets/Signifier/*
 !/assets/Signifier/Signifier-Light.ttf
+
+# Local, unused hosting metadata; deployment is GitHub-only.
+/.openai/
