@@ -1,3 +1,5 @@
+import { euclideanVectorPath } from './halftone-vector.js';
+import { circleCellInkArea, euclideanLevelForArea } from './halftone-tone.js';
 /** Local SVG import and vector halftoning. No uploaded data leaves the browser. */
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -210,7 +212,7 @@ function colorValue(value, fallback) {
 /**
  * Convert source coverage into editable SVG particles. Alpha mode (the default)
  * treats every source color equally. Luminance mode multiplies alpha by source
- * darkness, preserving grayscale shading and rendered blur in the dot radii.
+ * darkness, preserving grayscale shading and rendered blur in the ink coverage.
  * preserveAspectRatio emits a source-shaped viewBox with longest side 1000;
  * otherwise the source fits inside the original 1000-square output.
  */
@@ -254,7 +256,6 @@ export async function vectorToDots(source, options = {}) {
   const density = clamp(number(options.density, 70), 35, 110);
   const dotSize = clamp(number(options.dotSize, 1), .45, 1.6);
   const softness = clamp(number(options.softness, 1), .4, 1.8);
-  const squareness = clamp(number(options.particleSquareness, 0), 0, 100) / 100;
   const cells = Math.round(55 + density);
   const spacing = SIZE / cells;
   const columns = Math.max(1, Math.ceil(outputWidth / spacing - 1e-9));
@@ -263,7 +264,38 @@ export async function vectorToDots(source, options = {}) {
   const offsetY = (outputHeight - (rows - 1) * spacing) / 2;
   const maximumRadius = spacing * .425 * dotSize;
   const sampleRadius = Math.max(1, Math.round(spacing * .25 * softness));
-  const circles = [];
+  const particles = [];
+  if (options.particlePattern !== 'dot') {
+    // Keep the existing grayscale/alpha mapping. The shader's cosine screen
+    // changes its isocontour with local tone, rather than rounding every dot by
+    // the same amount. Sample the mapped tone continuously between pixels.
+    const tones = new Float32Array(pixelWidth * pixelHeight);
+    // The previous radius was .425*spacing*dotSize*sqrt(coverage). Convert its
+    // cell-area fraction to a cosine-screen level to preserve the prior ink density.
+    const radiusScaleSquared = .425 * .425 * dotSize * dotSize;
+    for (let y = 0; y < pixelHeight; y++) {
+      const top = Math.max(0, y-sampleRadius), bottom = Math.min(pixelHeight, y+sampleRadius+1);
+      for (let x = 0; x < pixelWidth; x++) {
+        const alpha = pixels[(y*pixelWidth+x)*4+3]/255;
+        if (alpha < .008) continue;
+        const left = Math.max(0, x-sampleRadius), right = Math.min(pixelWidth, x+sampleRadius+1);
+        const sum = integral[bottom*stride+right]-integral[top*stride+right]-integral[bottom*stride+left]+integral[top*stride+left];
+        const coverage = sum/((right-left)*(bottom-top))*Math.sqrt(alpha);
+        tones[y*pixelWidth+x] = euclideanLevelForArea(circleCellInkArea(coverage*radiusScaleSquared));
+      }
+    }
+    const sampleCoverage = (x, y) => {
+      if (x<0 || y<0 || x>outputWidth || y>outputHeight) return 0;
+      const px=clamp(x-.5,0,pixelWidth-1), py=clamp(y-.5,0,pixelHeight-1);
+      const x0=Math.floor(px), y0=Math.floor(py), x1=Math.min(x0+1,pixelWidth-1), y1=Math.min(y0+1,pixelHeight-1);
+      const tx=px-x0, ty=py-y0;
+      const a=tones[y0*pixelWidth+x0]*(1-tx)+tones[y0*pixelWidth+x1]*tx;
+      const b=tones[y1*pixelWidth+x0]*(1-tx)+tones[y1*pixelWidth+x1]*tx;
+      return a*(1-ty)+b*ty;
+    };
+    const path = await euclideanVectorPath({width:outputWidth,height:outputHeight,spacing,sampleCoverage,isCurrent:options.isCurrent});
+    if (path) particles.push(`<path fill-rule="evenodd" d="${path}"/>`);
+  } else {
   for (let row = 0; row < rows; row++) {
     const cy = offsetY + row * spacing;
     for (let col = 0; col < columns; col++) {
@@ -279,15 +311,11 @@ export async function vectorToDots(source, options = {}) {
       const coverage = sum / ((right - left) * (bottom - top));
       const radius = maximumRadius * Math.sqrt(coverage * Math.sqrt(center));
       if (radius < .08) continue;
-      if (squareness === 0) {
-        circles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
-      } else {
-        const size = radius * 2;
-        circles.push(`<rect x="${(cx-radius).toFixed(3)}" y="${(cy-radius).toFixed(3)}" width="${size.toFixed(3)}" height="${size.toFixed(3)}" rx="${(radius*(1-squareness)).toFixed(3)}"/>`);
-      }
+      particles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
     }
   }
-  if (!circles.length) throw new Error('The artwork is too fine at this density. Increase the dot density.');
+  }
+  if (!particles.length) throw new Error('The artwork is too fine at this density. Increase the dot density.');
   const color = colorValue(options.color, '#3982e9');
   const color2 = colorValue(options.color2, '#aacef3');
   const angle = (number(options.angle, 0) % 360) * Math.PI / 180;
@@ -296,5 +324,5 @@ export async function vectorToDots(source, options = {}) {
   const gradientID = `vector-gradient-${crypto.randomUUID()}`;
   const gradient = options.gradient ? `<defs><linearGradient id="${gradientID}" gradientUnits="userSpaceOnUse" x1="${(centerX - dx).toFixed(3)}" y1="${(centerY - dy).toFixed(3)}" x2="${(centerX + dx).toFixed(3)}" y2="${(centerY + dy).toFixed(3)}"><stop stop-color="${escapeXML(color)}"/><stop offset="1" stop-color="${escapeXML(color2)}"/></linearGradient></defs>` : '';
   const viewWidth = +outputWidth.toPrecision(12), viewHeight = +outputHeight.toPrecision(12);
-  return `<svg xmlns="${SVG_NS}" viewBox="0 0 ${viewWidth} ${viewHeight}" width="${viewWidth}" height="${viewHeight}" role="img" aria-label="Halftone vector artwork">${gradient}<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}">${circles.join('')}</g></svg>`;
+  return `<svg xmlns="${SVG_NS}" viewBox="0 0 ${viewWidth} ${viewHeight}" width="${viewWidth}" height="${viewHeight}" role="img" aria-label="Halftone vector artwork" data-particle-pattern="${options.particlePattern==='dot'?'dot':'blended'}">${gradient}<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}">${particles.join('')}</g></svg>`;
 }
