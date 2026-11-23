@@ -13,6 +13,7 @@ const files = [
   'assets/brand-palette.svg',
   'assets/phosphor-LICENSE',
   'assets/examples',
+  'assets/foundations',
 ];
 
 // Check inputs before replacing an existing successful build.

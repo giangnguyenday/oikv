@@ -3,11 +3,11 @@
 A local composition editor with one shared artboard across four tabs. Work through them in order or return to any tab while building a composition.
 
 - **Artboard:** digital and print presets, custom dimensions, orientation, and print resolution.
-- **Visual:** the four existing KV formations, SVG import or vector paste, six color sets, solid dot colors, background colors and linear gradients, and dot controls.
+- **Visual:** the four supplied SVG foundations, SVG import or vector paste, six color sets, solid dot colors, background colors and linear gradients, and dot controls.
 - **Imagery:** place raster images above the visual, frame and round their corners, and apply duotone or offset halftone treatments.
 - **Layout:** typography, symbol/logotype/combination-mark placeholders, asset uploads, color, and transforms. Select, move, proportionally scale, align, and rotate objects on the artboard.
 
-The current four KV formation designs are retained pending a separate visual correction.
+The four supplied originals are stored in `assets/foundations/strengthen.svg`, `reshape.svg`, `reorganize.svg`, and `optimize.svg`. Their original grayscale fills, blur filters, and proportions are preserved. Foundation thumbnails show these source vectors; the dot filter samples their combined luminance and alpha.
 
 ## Run locally
 

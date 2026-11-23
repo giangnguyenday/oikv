@@ -1,4 +1,4 @@
-/** Local SVG import and alpha-based vector halftoning. No uploaded data leaves the browser. */
+/** Local SVG import and vector halftoning. No uploaded data leaves the browser. */
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_BYTES = 2 * 1024 * 1024;
 const SIZE = 1000;
@@ -207,49 +207,73 @@ function colorValue(value, fallback) {
   return color && CSS.supports('color', color) && safeValue(color) ? color : fallback;
 }
 
-/** Convert source alpha into editable SVG circles; source colors never change coverage. */
+/**
+ * Convert source coverage into editable SVG circles. Alpha mode (the default)
+ * treats every source color equally. Luminance mode multiplies alpha by source
+ * darkness, preserving grayscale shading and rendered blur in the dot radii.
+ * preserveAspectRatio emits a source-shaped viewBox with longest side 1000;
+ * otherwise the source fits inside the original 1000-square output.
+ */
 export async function vectorToDots(source, options = {}) {
   const safe = sanitizeSVG(source);
   const { width, height } = svgDimensions(safe);
   const image = await loadSVG(safe);
+  const scale = SIZE / Math.max(width, height);
+  const drawWidth = width >= height ? SIZE : width * scale;
+  const drawHeight = height >= width ? SIZE : height * scale;
+  const outputWidth = options.preserveAspectRatio ? drawWidth : SIZE;
+  const outputHeight = options.preserveAspectRatio ? drawHeight : SIZE;
+  const pixelWidth = Math.max(1, Math.ceil(outputWidth));
+  const pixelHeight = Math.max(1, Math.ceil(outputHeight));
+  const luminanceMode = options.toneMode === 'luminance';
   const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = SIZE;
+  canvas.width = pixelWidth;
+  canvas.height = pixelHeight;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('Your browser could not create the vector preview.');
-  const scale = Math.min(SIZE / width, SIZE / height);
-  const drawWidth = width * scale, drawHeight = height * scale;
-  context.drawImage(image, (SIZE - drawWidth) / 2, (SIZE - drawHeight) / 2, drawWidth, drawHeight);
-  const pixels = context.getImageData(0, 0, SIZE, SIZE).data;
-  const stride = SIZE + 1;
-  const integral = new Float64Array(stride * stride);
+  context.drawImage(image, (outputWidth - drawWidth) / 2, (outputHeight - drawHeight) / 2, drawWidth, drawHeight);
+  const pixels = context.getImageData(0, 0, pixelWidth, pixelHeight).data;
+  const stride = pixelWidth + 1;
+  const integral = new Float64Array(stride * (pixelHeight + 1));
   let totalAlpha = 0;
-  for (let y = 0; y < SIZE; y++) {
-    let rowAlpha = 0;
-    for (let x = 0; x < SIZE; x++) {
-      rowAlpha += pixels[(y * SIZE + x) * 4 + 3] / 255;
-      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowAlpha;
+  let totalCoverage = 0;
+  for (let y = 0; y < pixelHeight; y++) {
+    let rowCoverage = 0;
+    for (let x = 0; x < pixelWidth; x++) {
+      const index = (y * pixelWidth + x) * 4;
+      const alpha = pixels[index + 3] / 255;
+      const darkness = luminanceMode ? 1 - (.2126 * pixels[index] + .7152 * pixels[index + 1] + .0722 * pixels[index + 2]) / 255 : 1;
+      totalAlpha += alpha;
+      rowCoverage += alpha * clamp(darkness, 0, 1);
+      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowCoverage;
     }
-    totalAlpha += rowAlpha;
+    totalCoverage += rowCoverage;
   }
   if (totalAlpha < 0.01) throw new Error('This SVG contains no visible artwork to convert.');
+  if (totalCoverage < 0.01) throw new Error('This SVG contains no dark tones to convert.');
   const density = clamp(number(options.density, 70), 35, 110);
   const dotSize = clamp(number(options.dotSize, 1), .45, 1.6);
   const softness = clamp(number(options.softness, 1), .4, 1.8);
   const cells = Math.round(55 + density);
   const spacing = SIZE / cells;
+  const columns = Math.max(1, Math.ceil(outputWidth / spacing - 1e-9));
+  const rows = Math.max(1, Math.ceil(outputHeight / spacing - 1e-9));
+  const offsetX = (outputWidth - (columns - 1) * spacing) / 2;
+  const offsetY = (outputHeight - (rows - 1) * spacing) / 2;
   const maximumRadius = spacing * .425 * dotSize;
   const sampleRadius = Math.max(1, Math.round(spacing * .25 * softness));
   const circles = [];
-  for (let row = 0; row < cells; row++) {
-    const cy = (row + .5) * spacing;
-    for (let col = 0; col < cells; col++) {
-      const cx = (col + .5) * spacing;
-      const px = Math.floor(cx), py = Math.floor(cy);
-      // Sampling alpha, not luminance, keeps white artwork and transparent holes.
-      const center = pixels[(py * SIZE + px) * 4 + 3] / 255;
+  for (let row = 0; row < rows; row++) {
+    const cy = offsetY + row * spacing;
+    for (let col = 0; col < columns; col++) {
+      const cx = offsetX + col * spacing;
+      const px = Math.min(pixelWidth - 1, Math.max(0, Math.floor(cx)));
+      const py = Math.min(pixelHeight - 1, Math.max(0, Math.floor(cy)));
+      // Gate by alpha even in luminance mode: transparent holes never become dots.
+      const center = pixels[(py * pixelWidth + px) * 4 + 3] / 255;
       if (center < .008) continue;
       const left = Math.max(0, px - sampleRadius), top = Math.max(0, py - sampleRadius);
-      const right = Math.min(SIZE, px + sampleRadius + 1), bottom = Math.min(SIZE, py + sampleRadius + 1);
+      const right = Math.min(pixelWidth, px + sampleRadius + 1), bottom = Math.min(pixelHeight, py + sampleRadius + 1);
       const sum = integral[bottom * stride + right] - integral[top * stride + right] - integral[bottom * stride + left] + integral[top * stride + left];
       const coverage = sum / ((right - left) * (bottom - top));
       const radius = maximumRadius * Math.sqrt(coverage * Math.sqrt(center));
@@ -262,7 +286,9 @@ export async function vectorToDots(source, options = {}) {
   const color2 = colorValue(options.color2, '#aacef3');
   const angle = (number(options.angle, 0) % 360) * Math.PI / 180;
   const dx = Math.cos(angle) * SIZE / 2, dy = Math.sin(angle) * SIZE / 2;
+  const centerX = outputWidth / 2, centerY = outputHeight / 2;
   const gradientID = `vector-gradient-${crypto.randomUUID()}`;
-  const gradient = options.gradient ? `<defs><linearGradient id="${gradientID}" gradientUnits="userSpaceOnUse" x1="${(500 - dx).toFixed(3)}" y1="${(500 - dy).toFixed(3)}" x2="${(500 + dx).toFixed(3)}" y2="${(500 + dy).toFixed(3)}"><stop stop-color="${escapeXML(color)}"/><stop offset="1" stop-color="${escapeXML(color2)}"/></linearGradient></defs>` : '';
-  return `<svg xmlns="${SVG_NS}" viewBox="0 0 1000 1000" width="1000" height="1000" role="img" aria-label="Halftone vector artwork">${gradient}<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}">${circles.join('')}</g></svg>`;
+  const gradient = options.gradient ? `<defs><linearGradient id="${gradientID}" gradientUnits="userSpaceOnUse" x1="${(centerX - dx).toFixed(3)}" y1="${(centerY - dy).toFixed(3)}" x2="${(centerX + dx).toFixed(3)}" y2="${(centerY + dy).toFixed(3)}"><stop stop-color="${escapeXML(color)}"/><stop offset="1" stop-color="${escapeXML(color2)}"/></linearGradient></defs>` : '';
+  const viewWidth = +outputWidth.toPrecision(12), viewHeight = +outputHeight.toPrecision(12);
+  return `<svg xmlns="${SVG_NS}" viewBox="0 0 ${viewWidth} ${viewHeight}" width="${viewWidth}" height="${viewHeight}" role="img" aria-label="Halftone vector artwork">${gradient}<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}">${circles.join('')}</g></svg>`;
 }
