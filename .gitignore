@@ -1,0 +1,9 @@
+.DS_Store
+/dist/
+/node_modules/
+
+# Keep only the two font files used by the editor and its export pipeline.
+/assets/Aeonik Pro TRIAL/*
+!/assets/Aeonik Pro TRIAL/AeonikProTRIAL-Regular.otf
+/assets/Signifier/*
+!/assets/Signifier/Signifier-Light.ttf

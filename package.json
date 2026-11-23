@@ -1,0 +1,16 @@
+{
+  "name": "one-innovation-kv-generator",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One Innovation's generative halftone key visual studio.",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "build": "node scripts/build.mjs",
+    "preview": "node server.mjs --dir dist"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
