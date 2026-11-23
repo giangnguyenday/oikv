@@ -3,11 +3,15 @@
 A local composition editor with one shared artboard across four tabs. Work through them in order or return to any tab while building a composition.
 
 - **Artboard:** digital and print presets, custom dimensions, orientation, and print resolution.
-- **Visual:** the four supplied SVG foundations, SVG import or vector paste, six color sets, solid dot colors, background colors and linear gradients, and dot controls.
+- **Visual:** the four supplied SVG foundations, SVG import or vector paste, six color sets, solid dot colors, background colors and linear gradients, and dot controls with a circle-to-square particle slider.
 - **Imagery:** place raster images above the visual, frame and round their corners, and apply duotone or offset halftone treatments.
 - **Layout:** typography, symbol/logotype/combination-mark placeholders, asset uploads, color, and transforms. Select, move, proportionally scale, align, and rotate objects on the artboard.
 
 The four supplied originals are stored in `assets/foundations/strengthen.svg`, `reshape.svg`, `reorganize.svg`, and `optimize.svg`. Their original grayscale fills, blur filters, and proportions are preserved. Foundation thumbnails show these source vectors; the dot filter samples their combined luminance and alpha.
+
+Particle shape changes only the particle outline: 0% keeps the original circles, intermediate values round the square corners, and 100% produces squares. Density, size, tone mapping, palette, and background gradients retain their previous behavior. Effects remain editable SVG geometry.
+
+The supplied `assets/effects/halftone.ts` and its metadata are archived for reference; its shader and color modes are not part of the runtime.
 
 ## Run locally
 

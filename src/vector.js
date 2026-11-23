@@ -208,7 +208,7 @@ function colorValue(value, fallback) {
 }
 
 /**
- * Convert source coverage into editable SVG circles. Alpha mode (the default)
+ * Convert source coverage into editable SVG particles. Alpha mode (the default)
  * treats every source color equally. Luminance mode multiplies alpha by source
  * darkness, preserving grayscale shading and rendered blur in the dot radii.
  * preserveAspectRatio emits a source-shaped viewBox with longest side 1000;
@@ -254,6 +254,7 @@ export async function vectorToDots(source, options = {}) {
   const density = clamp(number(options.density, 70), 35, 110);
   const dotSize = clamp(number(options.dotSize, 1), .45, 1.6);
   const softness = clamp(number(options.softness, 1), .4, 1.8);
+  const squareness = clamp(number(options.particleSquareness, 0), 0, 100) / 100;
   const cells = Math.round(55 + density);
   const spacing = SIZE / cells;
   const columns = Math.max(1, Math.ceil(outputWidth / spacing - 1e-9));
@@ -278,7 +279,12 @@ export async function vectorToDots(source, options = {}) {
       const coverage = sum / ((right - left) * (bottom - top));
       const radius = maximumRadius * Math.sqrt(coverage * Math.sqrt(center));
       if (radius < .08) continue;
-      circles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
+      if (squareness === 0) {
+        circles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
+      } else {
+        const size = radius * 2;
+        circles.push(`<rect x="${(cx-radius).toFixed(3)}" y="${(cy-radius).toFixed(3)}" width="${size.toFixed(3)}" height="${size.toFixed(3)}" rx="${(radius*(1-squareness)).toFixed(3)}"/>`);
+      }
     }
   }
   if (!circles.length) throw new Error('The artwork is too fine at this density. Increase the dot density.');
