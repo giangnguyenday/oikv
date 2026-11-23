@@ -9,9 +9,19 @@ A local composition editor with one shared artboard across four tabs. Work throu
 
 The four supplied originals are stored in `assets/foundations/strengthen.svg`, `reshape.svg`, `reorganize.svg`, and `optimize.svg`. Their original grayscale fills, blur filters, and proportions are preserved. Foundation thumbnails show these source vectors; the dot filter samples their combined luminance and alpha.
 
-Blended follows the supplied shader’s Euclidean cosine screen: lighter outer tones form round particles, midtones form squares, and dense tones join into ink around shrinking holes. A shared continuous tone field is traced into editable SVG paths, including holes; there is no uniform circle-to-square slider. Round dots keeps the earlier circle renderer. Density, size, edge sampling, palette, and background gradients remain available.
+Blended follows the supplied shader’s Euclidean cosine screen: lighter outer tones form round particles, midtones form squares, and dense tones join into ink around shrinking holes. A shared continuous tone field is traced into editable SVG paths, including holes; there is no uniform circle-to-square slider. Round dots keeps the earlier circle renderer. Manual controls include particle-size bounds, independent spacing, scale, softness, screen rotation, center, alpha clipping, and tone smoothing. Palette and background gradients remain available.
 
 The supplied `assets/effects/halftone.ts` and its metadata are archived for reference. `src/halftone-vector.js` reconstructs the Blended screen’s 50% coverage contour at the shader’s 45° monochrome screen angle, using marching squares and a compound SVG path. An inverse screen-area lookup preserves the earlier dot ink-area response while changing its geometry. It uses the editor’s existing grayscale/alpha mapping and brand color instead of the shader’s CMYK/RGB color separations. No raster halftone image or GPU shader is embedded in the effect.
+
+## Filter presets and Manual
+
+The six presets are **XL** (5.5–48), **L** (3.7–32), **M** (2.3–20), **S** (1.4–12), **Soft** (M with 0.4 softness), and **Tilted** (3.2–28 at 22.5°). XL uses the supplied reference’s Blended pattern, scale 1, softness 0, rotation 0, center 50%/50%, and clipping off. Presets do not change colors or background gradients.
+
+Min/Max are particle-diameter bounds in the normalized 1000-unit visual; spacing controls the screen period independently. Size presets use spacing near Max / 0.85. The earlier supplied shader exposes a single period, so these diameter bounds are an editor extension rather than a claimed port of an unavailable two-size shader.
+
+Manual sliders and numeric inputs allow Min size 0–240, Max size 1–240, spacing 4–240, scale 0–3, softness 0–1, screen rotation −180° to 180°, center 0–100%, and tone smoothing 0–4. Editing one size bound moves the other if necessary to keep Min ≤ Max. A scale of zero hides particles. Softness is a live SVG Gaussian blur; Clip to alpha applies an inline vector mask after that blur. No bitmap layer is introduced.
+
+Existing compositions migrate without resetting their previous spacing, ink-size response, or tone smoothing. Preset previews are actual SVG contours and remain available in the standalone build.
 
 ## Run locally
 

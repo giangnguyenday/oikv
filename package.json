@@ -8,6 +8,7 @@
     "dev": "node server.mjs",
     "start": "node server.mjs",
     "build": "node scripts/build.mjs",
+    "test": "node --test",
     "preview": "node server.mjs --dir dist"
   },
   "engines": {

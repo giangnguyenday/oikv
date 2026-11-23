@@ -65,6 +65,12 @@ export async function buildStandalone(root, output) {
     ['assets/foundations/reshape.svg', 'image/svg+xml'],
     ['assets/foundations/reorganize.svg', 'image/svg+xml'],
     ['assets/foundations/optimize.svg', 'image/svg+xml'],
+    ['assets/filter-presets/xl.svg', 'image/svg+xml'],
+    ['assets/filter-presets/l.svg', 'image/svg+xml'],
+    ['assets/filter-presets/m.svg', 'image/svg+xml'],
+    ['assets/filter-presets/s.svg', 'image/svg+xml'],
+    ['assets/filter-presets/soft.svg', 'image/svg+xml'],
+    ['assets/filter-presets/tilted.svg', 'image/svg+xml'],
   ];
   const [html, stylesheet, favicon, iconLicense] = await Promise.all([
     readFile(resolve(root, 'index.html'), 'utf8'),

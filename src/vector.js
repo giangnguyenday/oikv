@@ -1,5 +1,6 @@
 import { euclideanVectorPath } from './halftone-vector.js';
 import { circleCellInkArea, euclideanLevelForArea } from './halftone-tone.js';
+import { normalizeFilterSettings } from './filter-settings.js';
 /** Local SVG import and vector halftoning. No uploaded data leaves the browser. */
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -217,14 +218,26 @@ function colorValue(value, fallback) {
  * otherwise the source fits inside the original 1000-square output.
  */
 export async function vectorToDots(source, options = {}) {
+  const settings = normalizeFilterSettings(options);
+  const check = () => {
+    if (options.isCurrent && !options.isCurrent()) {
+      const error = new Error('A newer halftone visual is ready.');
+      error.name = 'AbortError';
+      throw error;
+    }
+  };
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  check();
   const safe = sanitizeSVG(source);
   const { width, height } = svgDimensions(safe);
   const image = await loadSVG(safe);
+  check();
   const scale = SIZE / Math.max(width, height);
   const drawWidth = width >= height ? SIZE : width * scale;
   const drawHeight = height >= width ? SIZE : height * scale;
   const outputWidth = options.preserveAspectRatio ? drawWidth : SIZE;
   const outputHeight = options.preserveAspectRatio ? drawHeight : SIZE;
+  const drawX = (outputWidth - drawWidth) / 2, drawY = (outputHeight - drawHeight) / 2;
   const pixelWidth = Math.max(1, Math.ceil(outputWidth));
   const pixelHeight = Math.max(1, Math.ceil(outputHeight));
   const luminanceMode = options.toneMode === 'luminance';
@@ -233,7 +246,7 @@ export async function vectorToDots(source, options = {}) {
   canvas.height = pixelHeight;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('Your browser could not create the vector preview.');
-  context.drawImage(image, (outputWidth - drawWidth) / 2, (outputHeight - drawHeight) / 2, drawWidth, drawHeight);
+  context.drawImage(image, drawX, drawY, drawWidth, drawHeight);
   const pixels = context.getImageData(0, 0, pixelWidth, pixelHeight).data;
   const stride = pixelWidth + 1;
   const integral = new Float64Array(stride * (pixelHeight + 1));
@@ -250,72 +263,91 @@ export async function vectorToDots(source, options = {}) {
       integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + rowCoverage;
     }
     totalCoverage += rowCoverage;
+    if ((y & 31) === 31) { check(); await tick(); }
   }
   if (totalAlpha < 0.01) throw new Error('This SVG contains no visible artwork to convert.');
   if (totalCoverage < 0.01) throw new Error('This SVG contains no dark tones to convert.');
-  const density = clamp(number(options.density, 70), 35, 110);
-  const dotSize = clamp(number(options.dotSize, 1), .45, 1.6);
-  const softness = clamp(number(options.softness, 1), .4, 1.8);
-  const cells = Math.round(55 + density);
-  const spacing = SIZE / cells;
-  const columns = Math.max(1, Math.ceil(outputWidth / spacing - 1e-9));
-  const rows = Math.max(1, Math.ceil(outputHeight / spacing - 1e-9));
-  const offsetX = (outputWidth - (columns - 1) * spacing) / 2;
-  const offsetY = (outputHeight - (rows - 1) * spacing) / 2;
-  const maximumRadius = spacing * .425 * dotSize;
-  const sampleRadius = Math.max(1, Math.round(spacing * .25 * softness));
+  const spacing = settings.spacing;
+  const sampleRadius = Math.max(0, Math.round(spacing * .25 * settings.edgeSampling));
+  const minimum = Math.min(settings.minSize, settings.maxSize);
+  const maximum = Math.max(settings.minSize, settings.maxSize);
+  // A zero tone or transparent center must stay empty before the minimum-size
+  // floor is applied, so a larger minimum cannot fill transparent cutouts.
+  const diameterAtPixel = (x, y) => {
+    const alpha = pixels[(y * pixelWidth + x) * 4 + 3] / 255;
+    if (alpha < .008) return 0;
+    const left = Math.max(0, x - sampleRadius), top = Math.max(0, y - sampleRadius);
+    const right = Math.min(pixelWidth, x + sampleRadius + 1), bottom = Math.min(pixelHeight, y + sampleRadius + 1);
+    const sum = integral[bottom * stride + right] - integral[top * stride + right]
+      - integral[bottom * stride + left] + integral[top * stride + left];
+    const tone = sum / ((right - left) * (bottom - top)) * Math.sqrt(alpha);
+    if (tone <= 0) return 0;
+    return (minimum + (maximum - minimum) * Math.sqrt(tone)) * settings.dotScale;
+  };
   const particles = [];
-  if (options.particlePattern !== 'dot') {
-    // Keep the existing grayscale/alpha mapping. The shader's cosine screen
-    // changes its isocontour with local tone, rather than rounding every dot by
-    // the same amount. Sample the mapped tone continuously between pixels.
+  const intentionallyEmpty = settings.dotScale === 0 || maximum === 0;
+  if (!intentionallyEmpty && settings.particlePattern !== 'dot') {
+    // Preserve the prior ink density: map the bounded particle's actual circle
+    // area into the Euclidean screen's area LUT, then contour that field.
     const tones = new Float32Array(pixelWidth * pixelHeight);
-    // The previous radius was .425*spacing*dotSize*sqrt(coverage). Convert its
-    // cell-area fraction to a cosine-screen level to preserve the prior ink density.
-    const radiusScaleSquared = .425 * .425 * dotSize * dotSize;
     for (let y = 0; y < pixelHeight; y++) {
-      const top = Math.max(0, y-sampleRadius), bottom = Math.min(pixelHeight, y+sampleRadius+1);
       for (let x = 0; x < pixelWidth; x++) {
-        const alpha = pixels[(y*pixelWidth+x)*4+3]/255;
-        if (alpha < .008) continue;
-        const left = Math.max(0, x-sampleRadius), right = Math.min(pixelWidth, x+sampleRadius+1);
-        const sum = integral[bottom*stride+right]-integral[top*stride+right]-integral[bottom*stride+left]+integral[top*stride+left];
-        const coverage = sum/((right-left)*(bottom-top))*Math.sqrt(alpha);
-        tones[y*pixelWidth+x] = euclideanLevelForArea(circleCellInkArea(coverage*radiusScaleSquared));
+        const diameter = diameterAtPixel(x, y);
+        if (!diameter) continue;
+        const normalizedRadius = diameter / (2 * spacing);
+        tones[y * pixelWidth + x] = euclideanLevelForArea(circleCellInkArea(normalizedRadius * normalizedRadius));
       }
+      if ((y & 7) === 7) { check(); await tick(); }
     }
     const sampleCoverage = (x, y) => {
-      if (x<0 || y<0 || x>outputWidth || y>outputHeight) return 0;
-      const px=clamp(x-.5,0,pixelWidth-1), py=clamp(y-.5,0,pixelHeight-1);
-      const x0=Math.floor(px), y0=Math.floor(py), x1=Math.min(x0+1,pixelWidth-1), y1=Math.min(y0+1,pixelHeight-1);
-      const tx=px-x0, ty=py-y0;
-      const a=tones[y0*pixelWidth+x0]*(1-tx)+tones[y0*pixelWidth+x1]*tx;
-      const b=tones[y1*pixelWidth+x0]*(1-tx)+tones[y1*pixelWidth+x1]*tx;
-      return a*(1-ty)+b*ty;
+      if (x < 0 || y < 0 || x > outputWidth || y > outputHeight) return 0;
+      const px = clamp(x - .5, 0, pixelWidth - 1), py = clamp(y - .5, 0, pixelHeight - 1);
+      const x0 = Math.floor(px), y0 = Math.floor(py), x1 = Math.min(x0 + 1, pixelWidth - 1), y1 = Math.min(y0 + 1, pixelHeight - 1);
+      const tx = px - x0, ty = py - y0;
+      const a = tones[y0 * pixelWidth + x0] * (1 - tx) + tones[y0 * pixelWidth + x1] * tx;
+      const b = tones[y1 * pixelWidth + x0] * (1 - tx) + tones[y1 * pixelWidth + x1] * tx;
+      return a * (1 - ty) + b * ty;
     };
-    const path = await euclideanVectorPath({width:outputWidth,height:outputHeight,spacing,sampleCoverage,isCurrent:options.isCurrent});
+    const path = await euclideanVectorPath({
+      width: outputWidth, height: outputHeight, spacing, sampleCoverage,
+      rotation: settings.screenRotation, centerX: settings.centerX, centerY: settings.centerY,
+      isCurrent: options.isCurrent,
+    });
     if (path) particles.push(`<path fill-rule="evenodd" d="${path}"/>`);
-  } else {
-  for (let row = 0; row < rows; row++) {
-    const cy = offsetY + row * spacing;
-    for (let col = 0; col < columns; col++) {
-      const cx = offsetX + col * spacing;
-      const px = Math.min(pixelWidth - 1, Math.max(0, Math.floor(cx)));
-      const py = Math.min(pixelHeight - 1, Math.max(0, Math.floor(cy)));
-      // Gate by alpha even in luminance mode: transparent holes never become dots.
-      const center = pixels[(py * pixelWidth + px) * 4 + 3] / 255;
-      if (center < .008) continue;
-      const left = Math.max(0, px - sampleRadius), top = Math.max(0, py - sampleRadius);
-      const right = Math.min(pixelWidth, px + sampleRadius + 1), bottom = Math.min(pixelHeight, py + sampleRadius + 1);
-      const sum = integral[bottom * stride + right] - integral[top * stride + right] - integral[bottom * stride + left] + integral[top * stride + left];
-      const coverage = sum / ((right - left) * (bottom - top));
-      const radius = maximumRadius * Math.sqrt(coverage * Math.sqrt(center));
-      if (radius < .08) continue;
-      particles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
+  } else if (!intentionallyEmpty) {
+    const columns = Math.max(1, Math.ceil(outputWidth / spacing - 1e-9));
+    const rows = Math.max(1, Math.ceil(outputHeight / spacing - 1e-9));
+    const centerX = outputWidth * settings.centerX / 100, centerY = outputHeight * settings.centerY / 100;
+    const angle = settings.screenRotation * Math.PI / 180;
+    const cosine = Math.cos(angle), sine = Math.sin(angle);
+    // Retain the old centered rectangular grid's half-cell phase when its
+    // number of rows/columns is even, including at the default 0° rotation.
+    const phaseX = columns % 2 === 0 ? .5 : 0, phaseY = rows % 2 === 0 ? .5 : 0;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (let corner = 0; corner < 4; corner++) {
+      const x = (corner & 1 ? outputWidth : 0) - centerX;
+      const y = (corner & 2 ? outputHeight : 0) - centerY;
+      const gx = (cosine * x + sine * y) / spacing - phaseX;
+      const gy = (-sine * x + cosine * y) / spacing - phaseY;
+      minX = Math.min(minX, gx); maxX = Math.max(maxX, gx);
+      minY = Math.min(minY, gy); maxY = Math.max(maxY, gy);
+    }
+    for (let row = Math.ceil(minY); row <= Math.floor(maxY); row++) {
+      for (let column = Math.ceil(minX); column <= Math.floor(maxX); column++) {
+        const gx = (column + phaseX) * spacing, gy = (row + phaseY) * spacing;
+        const cx = centerX + cosine * gx - sine * gy, cy = centerY + sine * gx + cosine * gy;
+        if (cx < 0 || cy < 0 || cx > outputWidth || cy > outputHeight) continue;
+        const px = Math.min(pixelWidth - 1, Math.max(0, Math.floor(cx)));
+        const py = Math.min(pixelHeight - 1, Math.max(0, Math.floor(cy)));
+        const radius = diameterAtPixel(px, py) / 2;
+        if (radius < .08) continue;
+        particles.push(`<circle cx="${cx.toFixed(3)}" cy="${cy.toFixed(3)}" r="${radius.toFixed(3)}"/>`);
+      }
+      if ((row & 7) === 7) { check(); await tick(); }
     }
   }
-  }
-  if (!particles.length) throw new Error('The artwork is too fine at this density. Increase the dot density.');
+  check();
+  if (!particles.length && !intentionallyEmpty) throw new Error('No particles fit this artwork. Reduce spacing or increase particle size.');
   const color = colorValue(options.color, '#3982e9');
   const color2 = colorValue(options.color2, '#aacef3');
   const angle = (number(options.angle, 0) % 360) * Math.PI / 180;
@@ -324,5 +356,26 @@ export async function vectorToDots(source, options = {}) {
   const gradientID = `vector-gradient-${crypto.randomUUID()}`;
   const gradient = options.gradient ? `<defs><linearGradient id="${gradientID}" gradientUnits="userSpaceOnUse" x1="${(centerX - dx).toFixed(3)}" y1="${(centerY - dy).toFixed(3)}" x2="${(centerX + dx).toFixed(3)}" y2="${(centerY + dy).toFixed(3)}"><stop stop-color="${escapeXML(color)}"/><stop offset="1" stop-color="${escapeXML(color2)}"/></linearGradient></defs>` : '';
   const viewWidth = +outputWidth.toPrecision(12), viewHeight = +outputHeight.toPrecision(12);
-  return `<svg xmlns="${SVG_NS}" viewBox="0 0 ${viewWidth} ${viewHeight}" width="${viewWidth}" height="${viewHeight}" role="img" aria-label="Halftone vector artwork" data-particle-pattern="${options.particlePattern==='dot'?'dot':'blended'}">${gradient}<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}">${particles.join('')}</g></svg>`;
+  const definitions = [];
+  const blurRadius = settings.filterSoftness * spacing * .15;
+  const blurID = `particle-softness-${crypto.randomUUID()}`;
+  if (blurRadius > 0) {
+    const padding = blurRadius * 4;
+    definitions.push(`<filter id="${blurID}" filterUnits="userSpaceOnUse" x="${-padding}" y="${-padding}" width="${outputWidth + padding * 2}" height="${outputHeight + padding * 2}" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="${blurRadius}"/></filter>`);
+  }
+  const maskID = `particle-alpha-${crypto.randomUUID()}`;
+  if (settings.clipToAlpha) {
+    const maskSource = parseSVG(safe).svg;
+    maskSource.setAttribute('x', String(drawX));
+    maskSource.setAttribute('y', String(drawY));
+    maskSource.setAttribute('width', String(drawWidth));
+    maskSource.setAttribute('height', String(drawHeight));
+    maskSource.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    definitions.push(`<mask id="${maskID}" maskUnits="userSpaceOnUse" maskContentUnits="userSpaceOnUse" x="0" y="0" width="${outputWidth}" height="${outputHeight}" mask-type="alpha">${new XMLSerializer().serializeToString(maskSource)}</mask>`);
+  }
+  const defs = definitions.length ? `<defs>${definitions.join('')}</defs>` : '';
+  let artwork = `<g fill="${options.gradient ? `url(#${gradientID})` : escapeXML(color)}"${blurRadius > 0 ? ` filter="url(#${blurID})"` : ''}>${particles.join('')}</g>`;
+  if (settings.clipToAlpha) artwork = `<g mask="url(#${maskID})">${artwork}</g>`;
+  const metadata = `data-particle-pattern="${settings.particlePattern}" data-min-size="${minimum}" data-max-size="${maximum}" data-spacing="${spacing}" data-dot-scale="${settings.dotScale}" data-filter-softness="${settings.filterSoftness}" data-screen-rotation="${settings.screenRotation}" data-center-x="${settings.centerX}" data-center-y="${settings.centerY}" data-clip-to-alpha="${settings.clipToAlpha}" data-edge-sampling="${settings.edgeSampling}"`;
+  return `<svg xmlns="${SVG_NS}" viewBox="0 0 ${viewWidth} ${viewHeight}" width="${viewWidth}" height="${viewHeight}" role="img" aria-label="Halftone vector artwork" ${metadata}>${gradient}${defs}${artwork}</svg>`;
 }

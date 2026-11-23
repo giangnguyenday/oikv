@@ -3,7 +3,6 @@
  * Compound paths use evenodd fill; the caller supplies the ink color.
  */
 const TAU = Math.PI * 2;
-const COS_45 = Math.SQRT1_2;
 const clamp01 = value => Math.max(0, Math.min(1, value));
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 const SEGMENTS = [
@@ -18,18 +17,18 @@ function abortError() {
 }
 
 /**
- * Sample at sixteen substeps per period, up to 2640 substeps on the long side.
- * The latter bounds work at the editor's maximum 165 screen cells. Samples on
+ * Sample at sixteen substeps per period, up to 4096 substeps on the long side.
+ * The latter bounds work for the expanded 4-unit minimum spacing. Samples on
  * the source boundary plus a negative padding ring close clipped contours.
  */
-export async function euclideanVectorPath({ width, height, spacing, sampleCoverage, dotScale = 1, isCurrent } = {}) {
+export async function euclideanVectorPath({ width, height, spacing, sampleCoverage, dotScale = 1, rotation = 0, centerX = 50, centerY = 50, isCurrent } = {}) {
   if (!(Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0)) throw new Error('Halftone contours need positive finite dimensions.');
   if (!(Number.isFinite(spacing) && spacing > 0) || typeof sampleCoverage !== 'function') throw new Error('Halftone contours need positive spacing and a coverage sampler.');
   const check = () => { if (isCurrent && !isCurrent()) throw abortError(); };
   check();
   const scale = Number.isFinite(dotScale) ? Math.max(0, dotScale) ** 2 : 1;
   if (!scale) return '';
-  const step = Math.max(spacing / 16, Math.max(width, height) / 2640);
+  const step = Math.max(spacing / 16, Math.max(width, height) / 4096);
   const innerCols = Math.max(1, Math.ceil(width / step));
   const innerRows = Math.max(1, Math.ceil(height / step));
   const cols = innerCols + 2, rows = innerRows + 2;
@@ -38,15 +37,18 @@ export async function euclideanVectorPath({ width, height, spacing, sampleCovera
   for (let i = 0; i <= innerCols; i++) xs[i + 1] = i * width / innerCols;
   for (let i = 0; i <= innerRows; i++) ys[i + 1] = i * height / innerRows;
   xs[cols] = width + step; ys[rows] = height + step;
-  const centerX = width / 2, centerY = height / 2;
+  const originX = width * clamp01((Number.isFinite(centerX) ? centerX : 50) / 100);
+  const originY = height * clamp01((Number.isFinite(centerY) ? centerY : 50) / 100);
+  const angle = ((Number.isFinite(rotation) ? rotation : 0) + 45) * Math.PI / 180;
+  const cosine = Math.cos(angle), sine = Math.sin(angle);
   const field = (x, y) => {
     if (x < 0 || y < 0 || x > width || y > height) return -1;
     const coverage = Number(sampleCoverage(x, y));
     const threshold = clamp01((Number.isFinite(coverage) ? coverage : 0) * scale) - .0005;
     if (threshold < 0) return threshold;
-    const dx = x - centerX, dy = y - centerY;
-    const gx = (COS_45 * dx + COS_45 * dy) / spacing;
-    const gy = (-COS_45 * dx + COS_45 * dy) / spacing;
+    const dx = x - originX, dy = y - originY;
+    const gx = (cosine * dx + sine * dy) / spacing;
+    const gy = (-sine * dx + cosine * dy) / spacing;
     const value = threshold - (.5 - .25 * (Math.cos(TAU * gx) + Math.cos(TAU * gy)));
     // A deterministic infinitesimal negative tie prevents vertices exactly on
     // sample nodes. It does not shift the 45-degree screen's coordinate phase.

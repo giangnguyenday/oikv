@@ -14,6 +14,7 @@ const files = [
   'assets/phosphor-LICENSE',
   'assets/examples',
   'assets/foundations',
+  'assets/filter-presets',
 ];
 
 // Check inputs before replacing an existing successful build.
