@@ -57,3 +57,9 @@ The repository includes `.github/workflows/pages.yml`. A push to `main` builds t
 Asset paths are relative, so the same build runs at the localhost root or a project address such as `https://<owner>.github.io/oikv/`. No base-URL setting is required. The generated standalone HTML remains self-contained.
 
 The repository tracks only the two fonts used by the editor; other supplied font weights and local build outputs are ignored. GitHub Pages supports private source repositories on eligible GitHub plans. Source-repository visibility and live-site visibility are separate GitHub settings; this workflow does not change either.
+
+## Public website
+
+The alternate hosting target is [OI KV Studio](https://oikv-studio.giangnguyen1111.chatgpt.site). Publication to this host is pending approval; the GitHub source repository remains private. GitHub Pages requires a paid GitHub plan for this private repository, so its optional workflow is available for manual deployment only.
+
+The Sites project is declared in `.openai/hosting.json`; publish the built `dist/` output through Sites after future edits.
